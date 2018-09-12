@@ -4,7 +4,6 @@ import scipy.stats
 from keras.layers import Input, Dense, Lambda, Reshape, concatenate
 from keras.models import Model
 from keras import backend as K
-from keras import losses
 
 import torch
 from torch.nn import Module, Linear, CrossEntropyLoss, BCELoss
@@ -96,13 +95,15 @@ class Classifier(Module):
         self.__classes_dim = params['label_dim']
         num_hidden = params['classifier_hidden_size']
         self.__hidden = Linear(self.__X_dim, num_hidden)
-        self.__out = Linear(num_hidden, self.__classes_dim)
+        self.__w_mean = Linear(num_hidden, self.__classes_dim)
+        self.__w_log_var = Linear(num_hidden, self.__classes_dim)
 
     def forward(self, x):
         x = self.__hidden(x)
         x = F.relu(x)
-        labels = self.__out(x)
-        return labels
+        w_mean = self.__w_mean(x)
+        w_log_var = self.__w_log_var(x)
+        return w_mean, w_log_var
 
 
 class ClVaeModel:
@@ -110,30 +111,115 @@ class ClVaeModel:
         self.__encoder = Encoder(**kwargs)
         self.__decoder = Decoder(**kwargs)
         self.__classifiers = [Classifier(label_dim=v, **kwargs) for i, v in enumerate(kwargs['classes_dim'])]
-        # Losses:
+        self.__encoder_optimizer = torch.optim.Adam(self.__encoder.parameters(), lr=kwargs['vae_learning_rate'])
+        self.__decoder_optimizer = torch.optim.Adam(self.__decoder.parameters(), lr=kwargs['vae_learning_rate'])
+        self.__classifier_optimizers = [torch.optim.Adam(classifier.paramseters(), lr=kwargs['classifier_learning_rate'])
+                                        for classifier in self.__classifiers]
+        self.__optimizers = self.__classifier_optimizers.extend([self.__encoder_optimizer, self.__decoder_optimizer ])
+    # Losses
+    @staticmethod
+    def z_Dkl_loss(z_mean, z_log_var):
+        return -0.5 * torch.sum(1 + z_log_var - torch.square(z_mean) - torch.exp(z_log_var), axis=-1)
 
-        def z_Dkl_loss(z_mean, z_log_var):
-            return -0.5 * torch.sum(1 + z_log_var - torch.square(z_mean) - torch.exp(z_log_var), axis=-1)
+    @staticmethod
+    def w_Dkl_loss(w_mean, w_log_var, w_log_var_prior):
+        vs = 1 - w_log_var_prior + w_log_var - torch.exp(w_log_var) / torch.exp(w_log_var_prior)\
+             - torch.square(w_mean) / torch.exp(w_log_var_prior)
+        return -0.5 * torch.sum(vs, axis=-1)
 
-        def w_Dkl_loss(w_mean, w_log_var, w_log_var_prior):
-            vs = 1 - w_log_var_prior + w_log_var - torch.exp(w_log_var) / torch.exp(w_log_var_prior)\
-                 - torch.square(w_mean) / torch.exp(w_log_var_prior)
-            return -0.5 * torch.sum(vs, axis=-1)
+    @staticmethod
+    def w_CCE_loss(w, w_true):
+        num_dim = w.shape[-1] # as in the original code loss should be reduced sample-wise
+        predictions = w.max(1)[1]
+        loss = CrossEntropyLoss()(predictions, w_true) * num_dim
+        return loss
 
-        def w_CCE_loss(w, w_true):
-            num_dim = w.shape[-1] # as in the original code
-            predictions = w.max(1)[1]
-            loss = CrossEntropyLoss()(predictions, w_true) * num_dim
-            return loss
+    @staticmethod
+    def x_BCE_loss(x, x_true):
+        num_dim = x.shape[-1] # as in the original code loss should be reduced sample-wise
+        loss = BCELoss()(x, x_true) * num_dim
+        return loss
 
-        def x_BCE_loss(x, x_true):
-            num_dim = x.shape[-1] # as in the original code
-            loss = BCELoss()(x, x_true) * num_dim
-            return loss
+    # Sampling
+    @staticmethod
+    def sample_x(x_mean):
+        return 1.0 * (np.random.rand(len(x_mean.squeeze())) <= x_mean)
+
+    @staticmethod
+    def sample_w(args, nsamps=1, nrm_samp=False, add_noise=True):
+        w_mean, w_log_var = args
+        if nsamps == 1:
+            eps = np.random.randn(*((1, w_mean.flatten().shape[0])))
+        else:
+            eps = np.random.randn(*((nsamps,) + w_mean.shape))
+        if eps.T.shape == w_mean.shape:
+            eps = eps.T
+        if add_noise:
+            w_norm = w_mean + np.exp(w_log_var / 2) * eps
+        else:
+            w_norm = w_mean + 0 * np.exp(w_log_var / 2) * eps
+        if nrm_samp:
+            return w_norm
+        if nsamps == 1:
+            w_norm = np.hstack([w_norm, np.zeros((w_norm.shape[0], 1))])
+            return np.exp(w_norm) / np.sum(np.exp(w_norm), axis=-1)[:, None]
+        else:
+            w_norm = np.dstack([w_norm, np.zeros(w_norm.shape[:-1] + (1,))])
+            return np.exp(w_norm) / np.sum(np.exp(w_norm), axis=-1)[:, :, None]
+
+    @staticmethod
+    def sample_z(args, nsamps=1):
+        Z_mean, Z_log_var = args
+        if nsamps == 1:
+            eps = np.random.randn(*Z_mean.squeeze().shape)
+        else:
+            eps = np.random.randn(*((nsamps,) + Z_mean.squeeze().shape))
+        return Z_mean + np.exp(Z_log_var / 2) * eps
 
 
+    def train_step(self, batch_x, batch_ws):
+        # zero grad all optimizers
+        for _, optimizer in enumerate(self.__optimizers):
+            optimizer.zero_grad()
 
-    def train(self, **kwargs):
+        # forward prop
+
+        # TODO: need to sample w before forward prop? Probably wee need to add noise even to true labels for better
+        # generalization of vae
+        w_sampled = batch_ws
+        # encode
+        z_mean, z_log_var = self.__encoder(batch_x, w_sampled)
+        # sample z
+        z = self.sample_z(z_mean, z_log_var)
+        # decode
+        x_decoded = self.__decoder(z, w_sampled)
+        # classifiers forward prop
+        ws_predicted = [classifier(batch_x) for classifier in self.__classifiers]
+
+        # losses
+        losses = []
+        losses.append(self.z_Dkl_loss(z_mean, z_log_var))
+        losses.append(self.x_BCE_loss(x_decoded, batch_x))
+
+        # TODO: need to add noise to true w?
+        w_true = w_sampled
+
+        for i, (w_mean_pred, w_log_var_pred) in enumerate(ws_predicted):
+            # sample w_pred
+            w_pred = self.sample_w(w_mean_pred, w_log_var_pred)
+            w_cce_loss = self.w_CCE_loss(w_pred, w_true[i])
+            w_dkl_loss = self.w_Dkl_loss(w_mean_pred, w_log_var_pred, w_log_var_prior=0.)
+            losses.append(w_cce_loss)
+            losses.append(w_dkl_loss)
+
+        # backward
+        for loss in losses:
+            loss.backward()
+
+        # step
+        for optimizer in self.__optimizers:
+            optimizer.step()
+
         pass
 
     def test(self, **kwargs):
