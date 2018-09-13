@@ -195,7 +195,7 @@ class ClVaeModel:
         # need to add '0' so we can sum it all to 1
         zeros = torch.zeros((w_mean.shape[0], 1))
         w_norm = torch.cat([w_norm, zeros], dim=1)
-        return torch.exp(w_norm) / torch.sum(torch.exp(w_norm), dim=-1)[:, None]
+        return torch.exp(w_norm) / torch.sum(torch.exp(w_norm), dim=-1)
 
 
     def train_step(self, batch_x, batch_ws):
