@@ -2,13 +2,20 @@
 Classifying variational autoencoders
 """
 import argparse
+import pprint
 import numpy as np
-from keras import backend as K
-from keras.utils import to_categorical
-from utils.pianoroll import PianoData
-from utils.model_utils import get_callbacks, save_model_in_pieces, init_adam_wn, AnnealLossWeight
-from utils.weightnorm import data_based_init
-from model import get_model
+import numpy.random as random
+from sklearn.datasets import fetch_mldata
+from sklearn.model_selection import train_test_split
+from sklearn import preprocessing
+import torch
+# from keras import backend as K
+# from keras.utils import to_categorical
+# from utils.pianoroll import PianoData
+# from utils.model_utils import get_callbacks, save_model_in_pieces, init_adam_wn, AnnealLossWeight
+# from utils.weightnorm import data_based_init
+# from model import get_model
+from src.pytorch_cl_vae.model import ClVaeModel
 
 def train(args):
     P = PianoData(args.train_file,
@@ -73,6 +80,39 @@ def train(args):
     best_loss = {k: history.history[k][best_ind] for k in history.history}
     return model, best_loss
 
+
+def train_MNIST(args):
+    params = vars(args)
+    # load MNIST database
+    mnist = fetch_mldata('MNIST original', data_home=args.data_dir)
+    num_samples, input_dim = mnist.data.shape
+    num_classes = len(np.unique(mnist.target))
+    lb = preprocessing.LabelBinarizer()
+    lb.fit(mnist.target)
+    params['classes_dim'] = [num_classes]
+    params['original_dim'] = input_dim
+    print('MNIST db has been successfully loaded, stored in the: "{}"'.format(args.data_dir + '/mldata'))
+    # split data to train and test subsets
+    X_train, X_test, y_train, y_test = train_test_split(mnist.data, mnist.target, test_size=0.1, random_state=0)
+    print("| Train subset shape:{} | Test subset shape:{} |".format(X_train.shape, X_test.shape))
+
+    # Initialize ClVaeModel
+    model = ClVaeModel(**params)
+    print("Model successfully initialized with params: ")
+    pprint.PrettyPrinter(indent=4).pprint(params)
+
+    # Train loop
+    for epoch in range(args.num_epochs):
+        for i in range(X_train.shape[0] // args.batch_size):
+            # Sample batch
+            idx = random.choice(np.arange(0, X_train.shape[0]), args.batch_size)
+            x_batch = torch.from_numpy(X_train[idx]).float()
+            y_batch = lb.transform(y_train[idx])
+            y_batch = [torch.from_numpy(y_batch).float()]
+            # x_batch, y_batch = random.choice(zip(X_train, y_train), args.batch_size)
+            model.train_step(x_batch, y_batch)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('run_name', type=str,
@@ -89,6 +129,16 @@ if __name__ == '__main__':
                 help='intermediate dim')
     parser.add_argument('--latent_dim', type=int, default=2,
                 help='latent dim')
+    parser.add_argument('--encoder_hidden_size', type=int, default=512,
+                        help='encoder hidden layer size')
+    parser.add_argument('--decoder_hidden_size', type=int, default=512,
+                        help='decoder hidden layer size')
+    parser.add_argument('--classifier_hidden_size', type=int, default=512,
+                        help='classifier hidden layer size')
+    parser.add_argument('--vae_learning_rate', type=float, default=0.001,
+                        help='vae learning rate')
+    parser.add_argument('--classifier_learning_rate', type=float, default=0.001,
+                        help='classifier learning rate')
     parser.add_argument('--seq_length', type=int, default=1,
                 help='sequence length (concat)')
     parser.add_argument('--class_weight', type=float, default=1.0,
@@ -113,10 +163,13 @@ if __name__ == '__main__':
     parser.add_argument('--log_dir', type=str, default='../data/logs',
                 help='basedir for saving log files')
     parser.add_argument('--model_dir', type=str,
-                default='../data/models',
+                default='../../data/models',
                 help='basedir for saving model weights')    
     parser.add_argument('--train_file', type=str,
                 default='../data/input/JSB Chorales_Cs.pickle',
                 help='file of training data (.pickle)')
+    parser.add_argument('--data_dir', type=str,
+                        default='../../data',
+                        help='basedir for saving and loading training data')
     args = parser.parse_args()
-    train(args)
+    train_MNIST(args)
