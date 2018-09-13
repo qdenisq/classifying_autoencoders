@@ -93,8 +93,8 @@ class Classifier(Module):
         self.__classes_dim = params['label_dim']
         num_hidden = params['classifier_hidden_size']
         self.__hidden = Linear(self.__X_dim, num_hidden)
-        self.__w_mean = Linear(num_hidden, self.__classes_dim)
-        self.__w_log_var = Linear(num_hidden, self.__classes_dim)
+        self.__w_mean = Linear(num_hidden, self.__classes_dim-1)
+        self.__w_log_var = Linear(num_hidden, self.__classes_dim-1)
 
     def forward(self, x):
         x = self.__hidden(x)
@@ -129,7 +129,7 @@ class ClVaeModel:
     @staticmethod
     def w_CCE_loss(w, w_true):
         num_dim = w.shape[-1] # as in the original code loss should be reduced sample-wise
-        predictions = w.max(1)[1]
+        predictions = w
         loss = CrossEntropyLoss()(predictions, w_true) * num_dim
         return loss
 
@@ -194,8 +194,13 @@ class ClVaeModel:
         w_norm = w_mean + torch.exp(w_log_var / 2) * eps
         # need to add '0' so we can sum it all to 1
         zeros = torch.zeros((w_mean.shape[0], 1))
-        w_norm = torch.cat([w_norm, zeros], dim=1)
-        return torch.exp(w_norm) / torch.sum(torch.exp(w_norm), dim=-1)
+        ones = torch.ones((w_mean.shape[0], 1))
+        sums = 1 + torch.sum(torch.exp(w_norm), dim=1)
+        w_norm = torch.cat([w_norm, ones], dim=1)
+        w_sampled = torch.exp(w_norm) / sums[:, None]
+        w_sums = torch.sum(w_sampled, dim=1)
+        w_sampled_1 = torch.exp(w_norm) / (1 + torch.sum(torch.exp(w_norm), dim=1))[:, None]
+        return w_sampled
 
 
     def train_step(self, batch_x, batch_ws):
@@ -230,13 +235,13 @@ class ClVaeModel:
             w_pred = self.w_sample(w_mean_pred, w_log_var_pred)
             labels = w_true[i].max(1)[1].squeeze()
             w_cce_loss = self.w_CCE_loss(w_pred, labels)
-            w_dkl_loss = self.w_Dkl_loss(w_mean_pred, w_log_var_pred, w_log_var_prior=0.)
+            w_dkl_loss = self.w_Dkl_loss(w_mean_pred, w_log_var_pred, w_log_var_prior=torch.ones(w_log_var_pred.shape))
             losses.append(w_cce_loss)
             losses.append(w_dkl_loss)
 
         # backward
         for loss in losses:
-            loss.backward()
+            loss.sum().backward(retain_graph=True)
 
         # step
         for optimizer in self.__optimizers:

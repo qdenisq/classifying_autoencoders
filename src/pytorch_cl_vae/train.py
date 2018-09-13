@@ -110,7 +110,11 @@ def train_MNIST(args):
             y_batch = lb.transform(y_train[idx])
             y_batch = [torch.from_numpy(y_batch).float()]
             # x_batch, y_batch = random.choice(zip(X_train, y_train), args.batch_size)
-            model.train_step(x_batch, y_batch)
+            losses = model.train_step(x_batch, y_batch)
+            losses = [loss.sum().detach().numpy() for loss in losses]
+            print("|train step: {} | rec loss: {} | z_dkl loss: {} | class loss: {} | w_dkl loss: {} |".format(
+                i, losses[0], losses[1], losses[2], losses[3]
+            ))
 
 
 if __name__ == '__main__':
