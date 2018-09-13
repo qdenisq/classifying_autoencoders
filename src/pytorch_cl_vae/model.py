@@ -59,8 +59,8 @@ class Encoder(Module):
         x = self.__hidden(x)
         x = F.relu(x)
         z_mean = self.__latent_mean(x)
-        z_var = self.__latent_var(x)
-        return z_mean, z_var
+        z_log_var = self.__latent_var(x)
+        return z_mean, z_log_var
 
 
 class Decoder(Module):
@@ -118,7 +118,8 @@ class ClVaeModel:
     # Losses
     @staticmethod
     def z_Dkl_loss(z_mean, z_log_var):
-        return -0.5 * torch.sum(1 + z_log_var - z_mean**2 - torch.exp(z_log_var), dim=-1)
+        loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1, dim=-1)
+        return loss
 
     @staticmethod
     def w_Dkl_loss(w_mean, w_log_var, w_log_var_prior):
@@ -130,13 +131,15 @@ class ClVaeModel:
     def w_CCE_loss(w, w_true):
         num_dim = w.shape[-1] # as in the original code loss should be reduced sample-wise
         predictions = w
-        loss = CrossEntropyLoss()(predictions, w_true) * num_dim
+        # loss = CrossEntropyLoss()(predictions, w_true) * num_dim
+        loss = CrossEntropyLoss()(predictions, w_true)
         return loss
 
     @staticmethod
     def x_BCE_loss(x, x_true):
         num_dim = x.shape[-1] # as in the original code loss should be reduced sample-wise
-        loss = BCELoss()(x, x_true) * num_dim
+        # loss = BCELoss()(x, x_true) * num_dim
+        loss = BCELoss()(x, x_true)
         return loss
 
     # Sampling
@@ -192,14 +195,13 @@ class ClVaeModel:
         eps = nrm.sample()
             # K.random_normal(shape=(batch_size, class_dim - 1), mean=0., stddev=1.0)
         w_norm = w_mean + torch.exp(w_log_var / 2) * eps
+        w_max = w_norm.max(1)[0]
+        w_norm = w_norm - w_max.view(-1, 1).expand_as(w_norm) # trick to avoid inf in exp(w)
         # need to add '0' so we can sum it all to 1
-        zeros = torch.zeros((w_mean.shape[0], 1))
         ones = torch.ones((w_mean.shape[0], 1))
         sums = 1 + torch.sum(torch.exp(w_norm), dim=1)
         w_norm = torch.cat([w_norm, ones], dim=1)
         w_sampled = torch.exp(w_norm) / sums[:, None]
-        w_sums = torch.sum(w_sampled, dim=1)
-        w_sampled_1 = torch.exp(w_norm) / (1 + torch.sum(torch.exp(w_norm), dim=1))[:, None]
         return w_sampled
 
 
@@ -224,8 +226,8 @@ class ClVaeModel:
 
         # losses
         losses = []
-        losses.append(self.z_Dkl_loss(z_mean, z_log_var))
         losses.append(self.x_BCE_loss(x_decoded, batch_x))
+        losses.append(self.z_Dkl_loss(z_mean, z_log_var))
 
         # TODO: need to add noise to true w?
         w_true = w_sampled
