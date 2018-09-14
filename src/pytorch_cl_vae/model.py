@@ -1,6 +1,7 @@
 import json
 import numpy as np
 import scipy.stats
+from sklearn.metrics import accuracy_score
 import torch
 from torch.nn import Module, Linear, CrossEntropyLoss, BCELoss
 import torch.nn.functional as F
@@ -118,14 +119,17 @@ class ClVaeModel:
     # Losses
     @staticmethod
     def z_Dkl_loss(z_mean, z_log_var):
-        loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1, dim=-1)
+        # loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1, dim=-1)
+        loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1) / z_log_var.shape[0]
         return loss
 
     @staticmethod
     def w_Dkl_loss(w_mean, w_log_var, w_log_var_prior):
         vs = 1 - w_log_var_prior + w_log_var - torch.exp(w_log_var) / torch.exp(w_log_var_prior)\
              - w_mean**2 / torch.exp(w_log_var_prior)
-        return -0.5 * torch.sum(vs, dim=-1)
+        # loss = -0.5 * torch.sum(vs, dim=-1)
+        loss = -0.5 * torch.sum(vs) / vs.shape[0]
+        return loss
 
     @staticmethod
     def w_CCE_loss(w, w_true):
@@ -187,22 +191,30 @@ class ClVaeModel:
 
     def w_sample(self, *args):
         """
-                sample from a logit-normal with params w_mean and w_log_var
-                    (n.b. this is very similar to a logistic-normal distribution)
-                """
+            sample from a logit-normal with params w_mean and w_log_var
+            (n.b. this is very similar to a logistic-normal distribution)
+        """
         w_mean, w_log_var = args
         nrm = Normal(torch.zeros(w_mean.shape), torch.ones(w_mean.shape))
         eps = nrm.sample()
             # K.random_normal(shape=(batch_size, class_dim - 1), mean=0., stddev=1.0)
+        # w_norm = w_mean + torch.exp(w_log_var / 2) * eps
+        # # w_max = w_norm.max(1)[0]
+        # # w_norm = w_norm - w_max.view(-1, 1).expand_as(w_norm) # trick to avoid inf in exp(w)
+        # # need to add '0' so we can sum it all to 1
+        # ones = torch.ones((w_mean.shape[0], 1))
+        # zeros = torch.zeros((w_mean.shape[0], 1))
+        # sums = 1 + torch.sum(torch.exp(w_norm), dim=1)
+        # w_norm = torch.cat([w_norm, ones], dim=1)
+        # w_sampled = torch.exp(w_norm) / sums[:, None]
+
+        w_mean, w_log_var = args
+        # nrm = Normal(torch.zeros(w_mean.shape), torch.ones(w_mean.shape))
         w_norm = w_mean + torch.exp(w_log_var / 2) * eps
-        w_max = w_norm.max(1)[0]
-        w_norm = w_norm - w_max.view(-1, 1).expand_as(w_norm) # trick to avoid inf in exp(w)
         # need to add '0' so we can sum it all to 1
-        ones = torch.ones((w_mean.shape[0], 1))
-        sums = 1 + torch.sum(torch.exp(w_norm), dim=1)
-        w_norm = torch.cat([w_norm, ones], dim=1)
-        w_sampled = torch.exp(w_norm) / sums[:, None]
-        return w_sampled
+        w_norm = torch.cat([w_norm, torch.zeros(w_mean.shape[0], 1)], dim=1)
+        return torch.exp(w_norm) / torch.sum(torch.exp(w_norm), dim=-1)[:, None]
+        # return w_sampled
 
 
     def train_step(self, batch_x, batch_ws):
@@ -212,7 +224,6 @@ class ClVaeModel:
 
         # forward prop
 
-        # TODO: need to sample w before forward prop? Probably wee need to add noise even to true labels for better
         # generalization of vae
         w_sampled = batch_ws
         # encode
@@ -229,17 +240,22 @@ class ClVaeModel:
         losses.append(self.x_BCE_loss(x_decoded, batch_x))
         losses.append(self.z_Dkl_loss(z_mean, z_log_var))
 
-        # TODO: need to add noise to true w?
-        w_true = w_sampled
+        accuracies = []
 
+        w_true = w_sampled
         for i, (w_mean_pred, w_log_var_pred) in enumerate(ws_predicted):
             # sample w_pred
             w_pred = self.w_sample(w_mean_pred, w_log_var_pred)
             labels = w_true[i].max(1)[1].squeeze()
+            labels_predict = w_pred.max(1)[1].squeeze()
+            acc = accuracy_score(labels, labels_predict)
+            accuracies.append(acc)
             w_cce_loss = self.w_CCE_loss(w_pred, labels)
-            w_dkl_loss = self.w_Dkl_loss(w_mean_pred, w_log_var_pred, w_log_var_prior=torch.ones(w_log_var_pred.shape))
+            w_dkl_loss = self.w_Dkl_loss(w_mean_pred, w_log_var_pred, w_log_var_prior=torch.zeros(w_log_var_pred.shape))
             losses.append(w_cce_loss)
             losses.append(w_dkl_loss)
+
+            # losses.append(w_dkl_loss)
 
         # backward
         for loss in losses:
@@ -249,7 +265,10 @@ class ClVaeModel:
         for optimizer in self.__optimizers:
             optimizer.step()
 
-        return losses
+
+
+
+        return losses, accuracies
 
     def test(self, **kwargs):
         pass

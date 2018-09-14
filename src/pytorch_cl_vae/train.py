@@ -9,6 +9,7 @@ from sklearn.datasets import fetch_mldata
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
 import torch
+from collections import namedtuple
 # from keras import backend as K
 # from keras.utils import to_categorical
 # from utils.pianoroll import PianoData
@@ -85,6 +86,7 @@ def train_MNIST(args):
     params = vars(args)
     # load MNIST database
     mnist = fetch_mldata('MNIST original', data_home=args.data_dir)
+    mnist.data = mnist.data / 255
     num_samples, input_dim = mnist.data.shape
     num_classes = len(np.unique(mnist.target))
     lb = preprocessing.LabelBinarizer()
@@ -101,7 +103,13 @@ def train_MNIST(args):
     print("Model successfully initialized with params: ")
     pprint.PrettyPrinter(indent=4).pprint(params)
 
+    train_losses = []
+    train_accuracies = []
+    Losses = namedtuple('Losses', 'rec_loss z_dkl_loss class_loss w_dkl_loss')
+    Accuracies = namedtuple("accuracies", 'accuracy')
+
     # Train loop
+    train_step_i = 0
     for epoch in range(args.num_epochs):
         for i in range(X_train.shape[0] // args.batch_size):
             # Sample batch
@@ -109,12 +117,24 @@ def train_MNIST(args):
             x_batch = torch.from_numpy(X_train[idx]).float()
             y_batch = lb.transform(y_train[idx])
             y_batch = [torch.from_numpy(y_batch).float()]
-            # x_batch, y_batch = random.choice(zip(X_train, y_train), args.batch_size)
-            losses = model.train_step(x_batch, y_batch)
-            losses = [loss.sum().detach().numpy() for loss in losses]
-            print("|train step: {} | rec loss: {} | z_dkl loss: {} | class loss: {} | w_dkl loss: {} |".format(
-                i, losses[0], losses[1], losses[2], losses[3]
-            ))
+            step_losses, step_accuracies = model.train_step(x_batch, y_batch)
+
+            step_losses = [loss.sum().detach().numpy() for loss in step_losses]
+            step_losses = Losses(*step_losses)
+            step_accuracies = Accuracies(*step_accuracies)
+
+            train_losses.append(step_losses)
+            train_accuracies.append(step_accuracies)
+
+            train_step_i += 1
+
+            print("\r|train step: {} | rec loss: {:.4f} | z_dkl loss: {:.4f} | class loss: {:.4f}"
+                  " | w_dkl loss: {:.4f} | class_accuracy: {:.4f} |".format(
+                train_step_i, *step_losses, *step_accuracies
+                ), end='')
+            if train_step_i % 100 == 0:
+                print()
+
 
 
 if __name__ == '__main__':
@@ -139,9 +159,9 @@ if __name__ == '__main__':
                         help='decoder hidden layer size')
     parser.add_argument('--classifier_hidden_size', type=int, default=512,
                         help='classifier hidden layer size')
-    parser.add_argument('--vae_learning_rate', type=float, default=0.001,
+    parser.add_argument('--vae_learning_rate', type=float, default=0.0001,
                         help='vae learning rate')
-    parser.add_argument('--classifier_learning_rate', type=float, default=0.001,
+    parser.add_argument('--classifier_learning_rate', type=float, default=0.0001,
                         help='classifier learning rate')
     parser.add_argument('--seq_length', type=int, default=1,
                 help='sequence length (concat)')
