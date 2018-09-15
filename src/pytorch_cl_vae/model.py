@@ -1,7 +1,10 @@
-import json
 import numpy as np
 import scipy.stats
 from sklearn.metrics import accuracy_score
+
+from collections import namedtuple
+import itertools
+
 import torch
 from torch.nn import Module, Linear, CrossEntropyLoss, BCELoss
 import torch.nn.functional as F
@@ -82,7 +85,7 @@ class Decoder(Module):
         x = self.__hidden(x)
         x = F.relu(x)
         x = self.__out(x)
-        x_decoded = F.sigmoid(x)
+        x_decoded = torch.sigmoid(x)
         return x_decoded
 
 
@@ -120,6 +123,14 @@ class ClVaeModel:
         self.__current_epoch = 0
         self.__current_losses = []
         self.__curent_accuracies = []
+
+        losses_names = ['rec_loss', 'z_dkl_loss']
+        acc_names = []
+        for i in range(len(self.__classifiers)):
+            losses_names.extend(['class_loss_'+str(i), 'w_dkl_loss_'+str(i)])
+            acc_names.append('accuracy_'+str(i))
+        self.Losses = namedtuple('Losses', losses_names)
+        self.Accuracies = namedtuple("accuracies", acc_names)
 
     # Losses
     @staticmethod
@@ -267,30 +278,55 @@ class ClVaeModel:
         for optimizer in self.__optimizers:
             optimizer.step()
 
+        named_losses = self.Losses._make(losses)
+        named_accuracies = self.Accuracies._make(accuracies)
+        return named_losses, named_accuracies
+
+    def test(self, x, ws_true):
+        labels_true = [ws_true[i].max(1)[1].squeeze() for i in range(len(ws_true))]
+        ws_pred, w_means_and_log_vars_pred, labels_predict = self.classify(x)
+        z, z_mean, z_log_var = self.encode(x, ws_pred)
+        x_decoded = self.decode(z, ws_pred)
+
+        cce_losses = [self.w_CCE_loss(ws_pred[i], labels_true[i]) for i in range(len(ws_true))]
+        w_dkl_losses = [self.w_Dkl_loss(*w_means_and_log_vars_pred[i],
+                                        w_log_var_prior=torch.zeros(w_means_and_log_vars_pred[i][1].shape)) for i in range(len(ws_true))]
+        bce_loss = self.x_BCE_loss(x_decoded, x)
+        z_dkl_loss = self.z_Dkl_loss(z_mean, z_log_var)
+
+
+        accuracies = [accuracy_score(labels_true[i], labels_predict[i]) for i in range(len(labels_true))]
+
+        losses = self.Losses._make([bce_loss, z_dkl_loss, *itertools.chain(*zip(cce_losses, w_dkl_losses))])
+        accuracies = self.Accuracies._make(accuracies)
         return losses, accuracies
 
-    def test(self, **kwargs):
-        pass
-
     def generate(self, **kwargs):
+        raise NotImplementedError()
         pass
 
-    def encode(self, x):
+    def encode(self, x, ws):
         with torch.no_grad():
-            ws = self.classify(x)
             z_mean, z_log_var = self.__encoder(x, ws)
             z = self.z_sample(z_mean, z_log_var)
-        return z
+        return z, z_mean, z_log_var
 
     def decode(self, z, ws):
-        pass
+        with torch.no_grad():
+            x_decoded = self.__decoder(z, ws)
+        return x_decoded
 
     def classify(self, x):
-        w_means_and_log_vars = [classifier(x) for classifier in self.__classifiers]
-        w_mean_pred, w_log_var_pred = zip(*w_means_and_log_vars)
-        w_pred = self.w_sample(w_mean_pred, w_log_var_pred)
-        labels_predict = w_pred.max(1)[1].squeeze()
-        return ws_predict, labels_predict
+        with torch.no_grad():
+            w_predict = []
+            labels_predict = []
+            w_means_and_log_vars = [classifier(x) for classifier in self.__classifiers]
+            for (w_mean, w_log_var) in w_means_and_log_vars:
+                w = self.w_sample(w_mean, w_log_var)
+                l = w.max(1)[1].squeeze()
+                w_predict.append(w)
+                labels_predict.append(l)
+        return w_predict, w_means_and_log_vars, labels_predict
 
     def save_ckpt(self, fname):
         ckpt = {
@@ -300,30 +336,29 @@ class ClVaeModel:
             'accuracies': self.__curent_accuracies,
             'encoder': self.__encoder.state_dict(),
             'decoder': self.__decoder.state_dict(),
-            'classifiers': [c.state_dict for c in self.__classifiers],
+            'classifiers': [c.state_dict() for c in self.__classifiers],
             'optimizers': [optim.state_dict() for optim in self.__optimizers]
         }
         torch.save(ckpt, fname)
 
-    def load_from_ckpt(self, fname):
+    @staticmethod
+    def load_from_ckpt(fname):
         ckpt = torch.load(fname)
+        model = ClVaeModel(**ckpt['params'])
+        model.__load_from_ckpt(ckpt)
+        return model
+
+    def __load_from_ckpt(self, ckpt):
         self.__params = ckpt['params']
         self.__current_epoch = ckpt['params']
         self.__current_losses = ckpt['losses']
         self.__curent_accuracies = ckpt['accuracies']
 
-        self.__encoder = Encoder(**self.__params).load_state_dict(ckpt['encoder'])
-        self.__decoder = Decoder(**self.__params).load_state_dict(ckpt['decoder'])
-        self.__classifiers = [Classifier(label_dim=v, **self.__params).load_state_dict(ckpt['classifiers'][i])
-                              for i, v in enumerate(self.__params['classes_dim'])]
+        self.__encoder.load_state_dict(ckpt['encoder'])
+        self.__decoder.load_state_dict(ckpt['decoder'])
 
-        self.__encoder_optimizer = torch.optim.Adam(self.__encoder.parameters(), lr=self.__params['vae_learning_rate'])\
-            .load_state_dict(ckpt['optimizers'][0])
-        self.__decoder_optimizer = torch.optim.Adam(self.__decoder.parameters(), lr=self.__params['vae_learning_rate'])\
-            .load_state_dict(ckpt['optimizers'][1])
-        self.__classifier_optimizers = [torch.optim.Adam(classifier.parameters(), lr=self.__params['classifier_learning_rate'])
-            .load_state_dict(ckpt['optimizers'][i+2]) for i, classifier in enumerate(self.__classifiers)]
+        for i, c in enumerate(self.__classifiers):
+            c.load_state_dict(ckpt['classifiers'][i])
 
-        self.__optimizers = self.__classifier_optimizers
-        self.__optimizers.extend([self.__encoder_optimizer, self.__decoder_optimizer])
-        pass
+        for i, o in enumerate(self.__optimizers):
+            o.load_state_dict(ckpt['optimizers'][i])
