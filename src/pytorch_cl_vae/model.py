@@ -136,7 +136,7 @@ class ClVaeModel:
     @staticmethod
     def z_Dkl_loss(z_mean, z_log_var):
         # loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1, dim=-1)
-        loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1) / z_log_var.shape[0]
+        loss = 0.5 * torch.mean(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1)
         return loss
 
     @staticmethod
@@ -144,7 +144,7 @@ class ClVaeModel:
         vs = 1 - w_log_var_prior + w_log_var - torch.exp(w_log_var) / torch.exp(w_log_var_prior)\
              - w_mean**2 / torch.exp(w_log_var_prior)
         # loss = -0.5 * torch.sum(vs, dim=-1)
-        loss = -0.5 * torch.sum(vs) / vs.shape[0]
+        loss = -0.5 * torch.mean(vs)
         return loss
 
     @staticmethod
@@ -253,7 +253,7 @@ class ClVaeModel:
         # losses
         losses = []
         losses.append(self.x_BCE_loss(x_decoded, batch_x))
-        losses.append(self.z_Dkl_loss(z_mean, z_log_var))
+        losses.append(0.01*self.z_Dkl_loss(z_mean, z_log_var))
 
         accuracies = []
 
