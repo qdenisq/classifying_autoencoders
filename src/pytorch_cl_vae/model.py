@@ -136,15 +136,28 @@ class ClVaeModel:
     @staticmethod
     def z_Dkl_loss(z_mean, z_log_var):
         # loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1, dim=-1)
-        loss = 0.5 * torch.mean(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1)
+        # zs = ClVaeModel.z_sample(z_mean, z_log_var)
+        # z_mean1 = zs.mean()
+        # z_log_var1 = (zs.std()**2).log()
+        #
+        z_mean1 = z_mean.mean(dim=0)
+        z_log_var1 = z_log_var.mean(dim=0) + (z_mean**2).mean(dim=0) - z_mean1**2
+
+        loss = 0.5 * torch.sum(torch.exp(z_log_var1) + z_mean1**2 - z_log_var1 - 1, dim=-1).mean()
         return loss
 
     @staticmethod
     def w_Dkl_loss(w_mean, w_log_var, w_log_var_prior):
-        vs = 1 - w_log_var_prior + w_log_var - torch.exp(w_log_var) / torch.exp(w_log_var_prior)\
-             - w_mean**2 / torch.exp(w_log_var_prior)
+        # ws = ClVaeModel.w_sample(w_mean, w_log_var)
+        # w_mean1 = ws.mean()
+        # w_log_var1 = (ws.std() ** 2).log()
+        w_mean1 = w_mean.mean(dim=0)
+        w_log_var1 = w_log_var.mean(dim=0) + (w_mean ** 2).mean(dim=0) - w_mean1 ** 2
+
+        vs = 1 - w_log_var_prior + w_log_var1 - torch.exp(w_log_var1) / torch.exp(w_log_var_prior)\
+             - w_mean1**2 / torch.exp(w_log_var_prior)
         # loss = -0.5 * torch.sum(vs, dim=-1)
-        loss = -0.5 * torch.mean(vs)
+        loss = -0.5 * torch.sum(vs, dim=-1).mean()
         return loss
 
     @staticmethod
@@ -198,14 +211,16 @@ class ClVaeModel:
             eps = np.random.randn(*((nsamps,) + Z_mean.squeeze().shape))
         return Z_mean + np.exp(Z_log_var / 2) * eps
 
-    def z_sample(self, *args):
+    @staticmethod
+    def z_sample(*args):
         z_mean, z_log_var = args
         nrm = Normal(torch.zeros(z_mean.shape), torch.ones(z_mean.shape))
         eps = nrm.sample()
         # eps = torch.random_normal(shape=(batch_size, latent_dim), mean=0., stddev=1.0)
         return z_mean + torch.exp(z_log_var / 2) * eps
 
-    def w_sample(self, *args):
+    @staticmethod
+    def w_sample(*args):
         """
             sample from a logit-normal with params w_mean and w_log_var
             (n.b. this is very similar to a logistic-normal distribution)
@@ -253,7 +268,7 @@ class ClVaeModel:
         # losses
         losses = []
         losses.append(self.x_BCE_loss(x_decoded, batch_x))
-        losses.append(0.01*self.z_Dkl_loss(z_mean, z_log_var))
+        losses.append(self.z_Dkl_loss(z_mean, z_log_var))
 
         accuracies = []
 
