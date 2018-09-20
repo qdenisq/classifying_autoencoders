@@ -136,7 +136,6 @@ class ClVaeModel:
     @staticmethod
     def z_Dkl_loss(z_mean, z_log_var):
         # loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1, dim=-1)
-<<<<<<< HEAD
         # zs = ClVaeModel.z_sample(z_mean, z_log_var)
         # z_mean1 = zs.mean()
         # z_log_var1 = (zs.std()**2).log()
@@ -145,9 +144,6 @@ class ClVaeModel:
         z_log_var1 = z_log_var.mean(dim=0) + (z_mean**2).mean(dim=0) - z_mean1**2
 
         loss = 0.5 * torch.sum(torch.exp(z_log_var1) + z_mean1**2 - z_log_var1 - 1, dim=-1).mean()
-=======
-        loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1) / z_log_var.shape[0]
->>>>>>> parent of 1643c55... DS: best cl_vae so far
         return loss
 
     @staticmethod
@@ -161,11 +157,7 @@ class ClVaeModel:
         vs = 1 - w_log_var_prior + w_log_var1 - torch.exp(w_log_var1) / torch.exp(w_log_var_prior)\
              - w_mean1**2 / torch.exp(w_log_var_prior)
         # loss = -0.5 * torch.sum(vs, dim=-1)
-<<<<<<< HEAD
         loss = -0.5 * torch.sum(vs, dim=-1).mean()
-=======
-        loss = -0.5 * torch.sum(vs) / vs.shape[0]
->>>>>>> parent of 1643c55... DS: best cl_vae so far
         return loss
 
     @staticmethod
