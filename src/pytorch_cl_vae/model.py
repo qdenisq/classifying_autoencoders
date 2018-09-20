@@ -140,10 +140,11 @@ class ClVaeModel:
         # z_mean1 = zs.mean()
         # z_log_var1 = (zs.std()**2).log()
         #
-        z_mean1 = z_mean.mean(dim=0)
-        z_log_var1 = z_log_var.mean(dim=0) + (z_mean**2).mean(dim=0) - z_mean1**2
-
-        loss = 0.5 * torch.sum(torch.exp(z_log_var1) + z_mean1**2 - z_log_var1 - 1, dim=-1).mean()
+        # z_mean1 = z_mean.mean(dim=0)
+        # z_log_var1 = z_log_var.mean(dim=0) + (z_mean**2).mean(dim=0) - z_mean1**2
+        #
+        # loss = 0.5 * torch.sum(torch.exp(z_log_var1) + z_mean1**2 - z_log_var1 - 1, dim=-1).mean()
+        loss = -0.5 * torch.sum(1 + z_log_var - z_mean.pow(2) - z_log_var.exp())
         return loss
 
     @staticmethod
@@ -151,28 +152,27 @@ class ClVaeModel:
         # ws = ClVaeModel.w_sample(w_mean, w_log_var)
         # w_mean1 = ws.mean()
         # w_log_var1 = (ws.std() ** 2).log()
-        w_mean1 = w_mean.mean(dim=0)
-        w_log_var1 = w_log_var.mean(dim=0) + (w_mean ** 2).mean(dim=0) - w_mean1 ** 2
-
-        vs = 1 - w_log_var_prior + w_log_var1 - torch.exp(w_log_var1) / torch.exp(w_log_var_prior)\
-             - w_mean1**2 / torch.exp(w_log_var_prior)
-        # loss = -0.5 * torch.sum(vs, dim=-1)
-        loss = -0.5 * torch.sum(vs, dim=-1).mean()
+        # w_mean1 = w_mean.mean(dim=0)
+        # w_log_var1 = w_log_var.mean(dim=0) + (w_mean ** 2).mean(dim=0) - w_mean1 ** 2
+        #
+        # vs = 1 - w_log_var_prior + w_log_var1 - torch.exp(w_log_var1) / torch.exp(w_log_var_prior)\
+        #      - w_mean1**2 / torch.exp(w_log_var_prior)
+        # # loss = -0.5 * torch.sum(vs, dim=-1)
+        # loss = -0.5 * torch.sum(vs, dim=-1).mean()
+        loss = -0.5 * torch.sum(1 + w_log_var - w_log_var_prior - w_mean.pow(2) / w_log_var_prior.exp() - w_log_var.exp() / w_log_var_prior.exp())
         return loss
 
     @staticmethod
     def w_CCE_loss(w, w_true):
-        num_dim = w.shape[-1] # as in the original code loss should be reduced sample-wise
-        predictions = w
         # loss = CrossEntropyLoss()(predictions, w_true) * num_dim
-        loss = CrossEntropyLoss()(predictions, w_true)
+        loss = CrossEntropyLoss(size_average=False)(w, w_true)
         return loss
 
     @staticmethod
     def x_BCE_loss(x, x_true):
         num_dim = x.shape[-1] # as in the original code loss should be reduced sample-wise
         # loss = BCELoss()(x, x_true) * num_dim
-        loss = BCELoss()(x, x_true)
+        loss = BCELoss(size_average=False)(x, x_true)
         return loss
 
     # Sampling
@@ -245,6 +245,7 @@ class ClVaeModel:
         w_norm = w_mean + torch.exp(w_log_var / 2) * eps
         # need to add '0' so we can sum it all to 1
         w_norm = torch.cat([w_norm, torch.zeros(w_mean.shape[0], 1)], dim=1)
+        w_probs = torch.exp(w_norm) / torch.sum(torch.exp(w_norm), dim=-1)[:, None]
         return torch.exp(w_norm) / torch.sum(torch.exp(w_norm), dim=-1)[:, None]
 
     def train_step(self, batch_x, batch_ws):
@@ -253,37 +254,41 @@ class ClVaeModel:
             optimizer.zero_grad()
 
         # forward prop
-
-        # generalization of vae
-        w_sampled = batch_ws
-        # encode
-        z_mean, z_log_var = self.__encoder(batch_x, w_sampled)
-        # sample z
-        z = self.z_sample(z_mean, z_log_var)
-        # decode
-        x_decoded = self.__decoder(z, w_sampled)
-        # classifiers forward prop
-        ws_predicted = [classifier(batch_x) for classifier in self.__classifiers]
-
         # losses
         losses = []
-        losses.append(self.x_BCE_loss(x_decoded, batch_x))
-        losses.append(self.z_Dkl_loss(z_mean, z_log_var))
+        losses.append(None)
+        losses.append(None)
 
         accuracies = []
 
-        w_true = w_sampled
+        # classifiers forward prop
+        ws_predicted = [classifier(batch_x) for classifier in self.__classifiers]
+        ws_sampled = []
+        w_true = batch_ws
         for i, (w_mean_pred, w_log_var_pred) in enumerate(ws_predicted):
             # sample w_pred
             w_pred = self.w_sample(w_mean_pred, w_log_var_pred)
+            ws_sampled.append(w_pred)
             labels = w_true[i].max(1)[1].squeeze()
             labels_predict = w_pred.max(1)[1].squeeze()
             acc = accuracy_score(labels, labels_predict)
             accuracies.append(acc)
             w_cce_loss = self.w_CCE_loss(w_pred, labels)
             w_dkl_loss = self.w_Dkl_loss(w_mean_pred, w_log_var_pred, w_log_var_prior=torch.zeros(w_log_var_pred.shape))
-            losses.append(w_cce_loss)
+            losses.append(10.*w_cce_loss)
             losses.append(w_dkl_loss)
+
+        # generalization of vae
+        w_sampled = ws_sampled
+        # encode
+        z_mean, z_log_var = self.__encoder(batch_x, w_sampled)
+        # sample z
+        z = self.z_sample(z_mean, z_log_var)
+        # decode
+        x_decoded = self.__decoder(z, w_sampled)
+
+        losses[0] = self.x_BCE_loss(x_decoded, batch_x)
+        losses[1] = self.z_Dkl_loss(z_mean, z_log_var)
 
         # backward
         total_loss = torch.sum(torch.stack(losses))
