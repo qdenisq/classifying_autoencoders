@@ -110,9 +110,10 @@ class Classifier(Module):
 class ClVaeModel:
     def __init__(self, **kwargs):
         self.__params = kwargs
-        self.__encoder = Encoder(**kwargs)
-        self.__decoder = Decoder(**kwargs)
-        self.__classifiers = [Classifier(label_dim=v, **kwargs) for i, v in enumerate(kwargs['classes_dim'])]
+        self.__device = torch.device(self.__params["device"])
+        self.__encoder = Encoder(**kwargs).to(self.__device)
+        self.__decoder = Decoder(**kwargs).to(self.__device)
+        self.__classifiers = [Classifier(label_dim=v, **kwargs).to(self.__device) for i, v in enumerate(kwargs['classes_dim'])]
         self.__encoder_optimizer = torch.optim.Adam(self.__encoder.parameters(), lr=kwargs['vae_learning_rate'])
         self.__decoder_optimizer = torch.optim.Adam(self.__decoder.parameters(), lr=kwargs['vae_learning_rate'])
         self.__classifier_optimizers = [torch.optim.Adam(classifier.parameters(), lr=kwargs['classifier_learning_rate'])
@@ -153,7 +154,6 @@ class ClVaeModel:
         # w_log_var1 = (ws.std() ** 2).log()
         w_mean1 = w_mean.mean(dim=0)
         w_log_var1 = w_log_var.mean(dim=0) + (w_mean ** 2).mean(dim=0) - w_mean1 ** 2
-
         vs = 1 - w_log_var_prior + w_log_var1 - torch.exp(w_log_var1) / torch.exp(w_log_var_prior)\
              - w_mean1**2 / torch.exp(w_log_var_prior)
         # loss = -0.5 * torch.sum(vs, dim=-1)
@@ -180,6 +180,7 @@ class ClVaeModel:
     def sample_x(x_mean):
         return 1.0 * (np.random.rand(len(x_mean.squeeze())) <= x_mean)
 
+    """
     @staticmethod
     def sample_w(*args, nsamps=1, nrm_samp=False, add_noise=True):
         w_mean, w_log_var = args
@@ -201,7 +202,8 @@ class ClVaeModel:
         else:
             w_norm = np.dstack([w_norm, np.zeros(w_norm.shape[:-1] + (1,))])
             return np.exp(w_norm) / np.sum(np.exp(w_norm), axis=-1)[:, :, None]
-
+    """
+    """
     @staticmethod
     def sample_z(*args, nsamps=1):
         Z_mean, Z_log_var = args
@@ -210,24 +212,23 @@ class ClVaeModel:
         else:
             eps = np.random.randn(*((nsamps,) + Z_mean.squeeze().shape))
         return Z_mean + np.exp(Z_log_var / 2) * eps
+    """
 
-    @staticmethod
-    def z_sample(*args):
+    def z_sample(self, *args):
         z_mean, z_log_var = args
         nrm = Normal(torch.zeros(z_mean.shape), torch.ones(z_mean.shape))
-        eps = nrm.sample()
+        eps = nrm.sample().to(self.__device)
         # eps = torch.random_normal(shape=(batch_size, latent_dim), mean=0., stddev=1.0)
         return z_mean + torch.exp(z_log_var / 2) * eps
 
-    @staticmethod
-    def w_sample(*args):
+    def w_sample(self, *args):
         """
             sample from a logit-normal with params w_mean and w_log_var
             (n.b. this is very similar to a logistic-normal distribution)
         """
         w_mean, w_log_var = args
         nrm = Normal(torch.zeros(w_mean.shape), torch.ones(w_mean.shape))
-        eps = nrm.sample()
+        eps = nrm.sample().to(self.__device)
             # K.random_normal(shape=(batch_size, class_dim - 1), mean=0., stddev=1.0)
         # w_norm = w_mean + torch.exp(w_log_var / 2) * eps
         # # w_max = w_norm.max(1)[0]
@@ -244,7 +245,7 @@ class ClVaeModel:
         # nrm = Normal(torch.zeros(w_mean.shape), torch.ones(w_mean.shape))
         w_norm = w_mean + torch.exp(w_log_var / 2) * eps
         # need to add '0' so we can sum it all to 1
-        w_norm = torch.cat([w_norm, torch.zeros(w_mean.shape[0], 1)], dim=1)
+        w_norm = torch.cat([w_norm, torch.zeros(w_mean.shape[0], 1).to(self.__device)], dim=1)
         return torch.exp(w_norm) / torch.sum(torch.exp(w_norm), dim=-1)[:, None]
 
     def train_step(self, batch_x, batch_ws):
@@ -281,7 +282,7 @@ class ClVaeModel:
             acc = accuracy_score(labels, labels_predict)
             accuracies.append(acc)
             w_cce_loss = self.w_CCE_loss(w_pred, labels)
-            w_dkl_loss = self.w_Dkl_loss(w_mean_pred, w_log_var_pred, w_log_var_prior=torch.zeros(w_log_var_pred.shape))
+            w_dkl_loss = self.w_Dkl_loss(w_mean_pred, w_log_var_pred, w_log_var_prior=torch.zeros(w_log_var_pred.shape).to(self.__device))
             losses.append(w_cce_loss)
             losses.append(w_dkl_loss)
 
