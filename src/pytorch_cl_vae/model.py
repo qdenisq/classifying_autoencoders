@@ -82,6 +82,8 @@ class Decoder(Module):
     def forward(self, z, ws):
         w_flat = torch.cat(ws, dim=-1)
         x = torch.cat((z, w_flat), dim=-1)
+        print(w_flat.size())
+        print(x.size())
         x = self.__hidden(x)
         x = F.relu(x)
         x = self.__out(x)
