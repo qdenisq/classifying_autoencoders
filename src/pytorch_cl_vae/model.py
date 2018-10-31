@@ -9,7 +9,7 @@ import torch
 from torch.nn import Module, Linear, CrossEntropyLoss, BCELoss
 import torch.nn.functional as F
 from torch.distributions import Normal
-
+import torchvision.models as models
 """
 Here is the general flow of the classifying VAE:
 
@@ -25,7 +25,7 @@ X --------->| Encoder |----> z_mean, z_var ---->| Decoder |----> X^
                  |----------------------------------|
                                                     |
        |------------|                               |
-w ---->| Classifier |----> w_mean, w_var ----> w^ --|
+X ---->| Classifier |----> w_mean, w_var ----> w^ --|
        |------------|
 
 Losses:
@@ -102,6 +102,24 @@ class Classifier(Module):
     def forward(self, x):
         x = self.__hidden(x)
         x = F.relu(x)
+        w_mean = self.__w_mean(x)
+        w_log_var = self.__w_log_var(x)
+        return w_mean, w_log_var
+
+
+class ResNet18Classifier(Module):
+    def __init__(self, **params):
+        super(ResNet18Classifier, self).__init__()
+        self.model = models.resnet18(pretrained=True)
+        for param in self.model.parameters():
+            param.requires_grad = False
+        self.__classes_dim = params['label_dim']
+        num_ftrs = self.model.fc.in_features
+        self.__w_mean = Linear(num_ftrs, self.__classes_dim - 1)
+        self.__w_log_var = Linear(num_ftrs, self.__classes_dim - 1)
+
+    def forward(self, x):
+        x = self.model(x)
         w_mean = self.__w_mean(x)
         w_log_var = self.__w_log_var(x)
         return w_mean, w_log_var

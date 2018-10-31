@@ -7,3 +7,4 @@ data/models/*
 *.mid
 **.iml
 **.xml
+data/input

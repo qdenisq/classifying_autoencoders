@@ -11,8 +11,12 @@ from sklearn import preprocessing
 import torch
 from src.pytorch_cl_vae.model import ClVaeModel
 
+
+
 def train_MNIST(args):
+
     params = vars(args)
+    device =torch.device(params['device'])
     # load MNIST database
     mnist = fetch_mldata('MNIST original', data_home=params['data_dir'])
     mnist.data = mnist.data / 255
@@ -43,18 +47,18 @@ def train_MNIST(args):
         for i in range(X_train.shape[0] // params['batch_size']):
             # Sample batch
             idx = random.choice(np.arange(0, X_train.shape[0]), params['batch_size'])
-            x_batch = torch.from_numpy(X_train[idx]).float()
+            x_batch = torch.from_numpy(X_train[idx]).float().to(device)
             y_batch = lb.transform(y_train[idx])
-            y_batch = [torch.from_numpy(y_batch).float()]
+            y_batch = [torch.from_numpy(y_batch).float().to(device)]
 
             step_losses, step_accuracies = model.train_step(x_batch, y_batch)
             train_losses.append(step_losses)
             train_accuracies.append(step_accuracies)
             train_step_i += 1
 
-            print("\r|train step: {} | rec loss: {:.4f} | z_dkl loss: {:.4f} | class loss: {:.4f}"
+            print("\r|progress: {:.2f}% | train step: {} | rec loss: {:.4f} | z_dkl loss: {:.4f} | class loss: {:.4f}"
                   " | w_dkl loss: {:.4f} | class_accuracy: {:.4f} |".format(
-                train_step_i, *step_losses, *step_accuracies
+                100.* train_step_i / (X_train.shape[0] // params['batch_size'] * params['num_epochs']), train_step_i, *step_losses, *step_accuracies
                 ), end='')
             if train_step_i % 100 == 0:
                 print()
@@ -64,6 +68,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('run_name', type=str,
                 help='tag for current run')
+    parser.add_argument('--device', type=str, default='cuda:0',
+                        help='whether to use gpu or not')
     parser.add_argument('--batch_size', type=int, default=100,
                 help='batch size')
     parser.add_argument('--optimizer', type=str, default='adam-wn',
