@@ -154,42 +154,30 @@ class ClVaeModel:
     # Losses
     @staticmethod
     def z_Dkl_loss(z_mean, z_log_var):
-        # loss = 0.5 * torch.sum(torch.exp(z_log_var) + z_mean**2 - z_log_var - 1, dim=-1)
-        # zs = ClVaeModel.z_sample(z_mean, z_log_var)
-        # z_mean1 = zs.mean()
-        # z_log_var1 = (zs.std()**2).log()
-        #
-        z_mean1 = z_mean.mean(dim=0)
-        z_log_var1 = z_log_var.mean(dim=0) + (z_mean**2).mean(dim=0) - z_mean1**2
+        z_mean_batch = z_mean.mean(dim=0)
+        z_log_var_batch = z_log_var.mean(dim=0) + (z_mean**2).mean(dim=0) - z_mean_batch**2
 
-        loss = 0.5 * torch.sum(torch.exp(z_log_var1) + z_mean1**2 - z_log_var1 - 1, dim=-1).mean()
+        loss = 0.5 * torch.sum(torch.exp(z_log_var_batch) + z_mean_batch**2 - z_log_var_batch - 1, dim=-1).mean()
         return loss
 
     @staticmethod
     def w_Dkl_loss(w_mean, w_log_var, w_log_var_prior):
-        # ws = ClVaeModel.w_sample(w_mean, w_log_var)
-        # w_mean1 = ws.mean()
-        # w_log_var1 = (ws.std() ** 2).log()
-        w_mean1 = w_mean.mean(dim=0)
-        w_log_var1 = w_log_var.mean(dim=0) + (w_mean ** 2).mean(dim=0) - w_mean1 ** 2
-        vs = 1 - w_log_var_prior + w_log_var1 - torch.exp(w_log_var1) / torch.exp(w_log_var_prior)\
-             - w_mean1**2 / torch.exp(w_log_var_prior)
+        w_mean_batch = w_mean.mean(dim=0)
+        w_log_var_batch = w_log_var.mean(dim=0) + (w_mean ** 2).mean(dim=0) - w_mean_batch ** 2
+        vs = 1 - w_log_var_prior + w_log_var_batch - torch.exp(w_log_var_batch) / torch.exp(w_log_var_prior)\
+             - w_mean_batch**2 / torch.exp(w_log_var_prior)
         # loss = -0.5 * torch.sum(vs, dim=-1)
         loss = -0.5 * torch.sum(vs, dim=-1).mean()
         return loss
 
     @staticmethod
     def w_CCE_loss(w, w_true):
-        num_dim = w.shape[-1] # as in the original code loss should be reduced sample-wise
         predictions = w
-        # loss = CrossEntropyLoss()(predictions, w_true) * num_dim
         loss = CrossEntropyLoss()(predictions, w_true)
         return loss
 
     @staticmethod
     def x_BCE_loss(x, x_true):
-        num_dim = x.shape[-1] # as in the original code loss should be reduced sample-wise
-        # loss = BCELoss()(x, x_true) * num_dim
         loss = BCELoss()(x, x_true)
         return loss
 
@@ -197,40 +185,6 @@ class ClVaeModel:
     @staticmethod
     def sample_x(x_mean):
         return 1.0 * (np.random.rand(len(x_mean.squeeze())) <= x_mean)
-
-    """
-    @staticmethod
-    def sample_w(*args, nsamps=1, nrm_samp=False, add_noise=True):
-        w_mean, w_log_var = args
-        if nsamps == 1:
-            eps = np.random.randn(*((1, w_mean.flatten().shape[0])))
-        else:
-            eps = np.random.randn(*((nsamps,) + w_mean.shape))
-        if eps.T.shape == w_mean.shape:
-            eps = eps.T
-        if add_noise:
-            w_norm = w_mean + np.exp(w_log_var / 2) * eps
-        else:
-            w_norm = w_mean + 0 * np.exp(w_log_var / 2) * eps
-        if nrm_samp:
-            return w_norm
-        if nsamps == 1:
-            w_norm = np.hstack([w_norm, np.zeros((w_norm.shape[0], 1))])
-            return np.exp(w_norm) / np.sum(np.exp(w_norm), axis=-1)[:, None]
-        else:
-            w_norm = np.dstack([w_norm, np.zeros(w_norm.shape[:-1] + (1,))])
-            return np.exp(w_norm) / np.sum(np.exp(w_norm), axis=-1)[:, :, None]
-    """
-    """
-    @staticmethod
-    def sample_z(*args, nsamps=1):
-        Z_mean, Z_log_var = args
-        if nsamps == 1:
-            eps = np.random.randn(*Z_mean.squeeze().shape)
-        else:
-            eps = np.random.randn(*((nsamps,) + Z_mean.squeeze().shape))
-        return Z_mean + np.exp(Z_log_var / 2) * eps
-    """
 
     def z_sample(self, *args):
         z_mean, z_log_var = args
@@ -247,22 +201,9 @@ class ClVaeModel:
         w_mean, w_log_var = args
         nrm = Normal(torch.zeros(w_mean.shape), torch.ones(w_mean.shape))
         eps = nrm.sample().to(self.__device)
-            # K.random_normal(shape=(batch_size, class_dim - 1), mean=0., stddev=1.0)
-        # w_norm = w_mean + torch.exp(w_log_var / 2) * eps
-        # # w_max = w_norm.max(1)[0]
-        # # w_norm = w_norm - w_max.view(-1, 1).expand_as(w_norm) # trick to avoid inf in exp(w)
-        # # need to add '0' so we can sum it all to 1
-        # ones = torch.ones((w_mean.shape[0], 1))
-        # zeros = torch.zeros((w_mean.shape[0], 1))
-        # sums = 1 + torch.sum(torch.exp(w_norm), dim=1)
-        # w_norm = torch.cat([w_norm, ones], dim=1)
-        # w_sampled = torch.exp(w_norm) / sums[:, None]
-        # return w_sampled
 
         w_mean, w_log_var = args
-        # nrm = Normal(torch.zeros(w_mean.shape), torch.ones(w_mean.shape))
         w_norm = w_mean + torch.exp(w_log_var / 2) * eps
-        # need to add '0' so we can sum it all to 1
         w_norm = torch.cat([w_norm, torch.zeros(w_mean.shape[0], 1).to(self.__device)], dim=1)
         return torch.exp(w_norm) / torch.sum(torch.exp(w_norm), dim=-1)[:, None]
 
