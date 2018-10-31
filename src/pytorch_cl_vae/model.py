@@ -115,8 +115,10 @@ class ResNet18Classifier(Module):
             param.requires_grad = False
         self.__classes_dim = params['label_dim']
         num_ftrs = self.model.fc.in_features
-        self.__w_mean = Linear(num_ftrs, self.__classes_dim - 1)
-        self.__w_log_var = Linear(num_ftrs, self.__classes_dim - 1)
+        num_hidden = 256
+        self.model.fc = Linear(num_ftrs, num_hidden)
+        self.__w_mean = Linear(num_hidden, self.__classes_dim)
+        self.__w_log_var = Linear(num_hidden, self.__classes_dim)
 
     def forward(self, x):
         x = self.model(x)

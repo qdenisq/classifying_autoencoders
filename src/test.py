@@ -1,7 +1,5 @@
-import torch
-import torchvision
-from loader import get_loader
-from loader import chew
+from src.loader import get_loader
+from src.loader import chew
 
 impath = "/Users/seanmorrison/Desktop/CelebA/img_align_celeba/"
 attpath = "/Users/seanmorrison/Desktop/CelebA/list_attr_celeba.txt"

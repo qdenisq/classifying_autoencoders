@@ -31,6 +31,7 @@ class CelebA(data.Dataset):
     def preprocess(self):
         """Preprocess the CelebA attribute file."""
         lines = [line.rstrip() for line in open(self.attr_path, 'r')]
+        lines = lines[:85000]
         all_attr_names = lines[1].split()
         for i, attr_name in enumerate(all_attr_names):
             self.attr2idx[attr_name] = i
